@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 export const db = new Database("minirutter.db");
 
 db.exec(`
-  PRAGMA journal_mode = WAL
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY,

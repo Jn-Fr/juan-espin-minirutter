@@ -1,5 +1,6 @@
 import { request } from "undici";
-import "dotenv/config";
+import * as dotenv from "dotenv";
+dotenv.config();
 
 const BASE = process.env.SHOPIFY_BASE_URL!;
 const TOKEN = process.env.SHOPIFY_TOKEN!;
