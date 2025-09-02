@@ -8,8 +8,7 @@
     "sync:products": "ts-node src/cli.ts sync-products",
     "sync:orders": "ts-node src/cli.ts sync-orders",
     "get:products": "ts-node src/cli.ts get-products",
-    "get:orders": "ts-node src/cli.ts get-orders",
-    "test:sync": "node dist/testSync.js"
+    "get:orders": "ts-node src/cli.ts get-orders"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
