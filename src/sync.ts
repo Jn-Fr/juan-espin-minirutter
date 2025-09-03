@@ -9,81 +9,102 @@ import {
   getOrderIdByPlatform,
 } from "./db";
 
-type ShopifyProducts = { products: any[] };
-type ShopifyOrders = { orders: any[] };
+type ShopifyProductsResponse = { products: any[] };
+type ShopifyOrdersResponse = { orders: any[] };
 
-const MAX = 50;
+const MAX_PER_REQUEST = 50;
 const SOFT_DELAY = 300;
 
+
+/**
+ * Fetch and persist all products from Shopify (paginated).
+ * Returns the number of products processed.
+ */
 export async function syncProducts() {
 
-  let next: string | undefined, total = 0;
+  let nextCursor: string | undefined;
+  let totalProcessed = 0;
 
   do {
-    const q: Record<string, string> = { limit: String(MAX) };
+    const query: Record<string, string> = { limit: String(MAX_PER_REQUEST) };
 
-    if (next) q.page_info = next;
+    if (nextCursor) query.page_info = nextCursor;
 
-    const { body, nextPageInfo } = await shopifyGet<ShopifyProducts>("products.json", q);
+    const { body, nextPageInfo } = await shopifyGet<ShopifyProductsResponse>("products.json", query);
 
-    for (const p of (body.products ?? [])) {
+    const products = body.products ?? [];
+
+    // Upsert each product by platform_id; keep an internal UUID id
+    for (const p of products) {
       upsertProduct.run({
         id: newId(),
         platform_id: String(p.id),
         name: p.title ?? ""
       });
-      total++;
+      totalProcessed++;
     }
 
-    next = nextPageInfo;
-    if (next) await sleep(SOFT_DELAY);
+    nextCursor = nextPageInfo;
+    if (nextCursor) await sleep(SOFT_DELAY);
 
-  } while (next);
+  } while (nextCursor);
 
-  return total;
+  return totalProcessed;
 
 }
 
-// Hasta 500 órdenes; si <50 pero hay next, usar limit=1 (regla del enunciado)
+/**
+ * Fetch and persist up to 500 orders from Shopify (paginated).
+ * Special rule: If the first page returns <50 orders but has a next page, switch to limit=1 afterward.
+ * Returns the number of orders processed.
+ */
 export async function syncOrders() {
 
-  let next: string | undefined, total = 0, fetched = 0, limit = MAX;
+  let nextCursor: string | undefined;
+  let totalProcessed = 0;
+  let fetchedCount = 0;
 
-  async function pageRun(pi?: string) {
+  // Start with the maximum allowed per call
+  let itemsLimit = MAX_PER_REQUEST;
 
-    const q: Record<string, string> = { status: "any", limit: String(limit) };
+  // Processes one page: fetch, persist, link line items.
+  async function pageRun(cursor?: string) {
 
-    if (pi) q.page_info = pi;
+    const query: Record<string, string> = { status: "any", limit: String(itemsLimit) };
 
-    const { body, nextPageInfo } = await shopifyGet<ShopifyOrders>("orders.json", q);
+    if (cursor) query.page_info = cursor;
+
+    const { body, nextPageInfo } = await shopifyGet<ShopifyOrdersResponse>("orders.json", query);
 
     const orders = body.orders ?? [];
 
+    // Page-level transaction for consistency
     const tx = db.transaction((batch: any[]) => {
       for (const o of batch) {
-        const platform_id = String(o.id);
+        const platformOrderId = String(o.id);
 
-        // IMPORTANTE: usar .get() para capturar el RETURNING id
-        const inserted = upsertOrder.get({ id: newId(), platform_id }) as { id: string } | undefined;
+        // Insert order (do nothing if exists); retrieve internal id
+        const inserted = upsertOrder.get({ id: newId(), platform_id: platformOrderId }) as { id: string } | undefined;
 
-        // Si no insertó (porque ya existía), buscamos el id existente
-        const row = inserted ?? (getOrderIdByPlatform.get(platform_id) as { id: string } | undefined);
+        // If not inserted (because it already existed), we search for the existing id
+        const orderRow = inserted ?? (getOrderIdByPlatform.get(platformOrderId) as { id: string } | undefined);
 
-        const orderId = row?.id;
+        const internalOrderId = orderRow?.id;
 
+        // For each line item, resolve internal product id (or null)
         for (const li of (o.line_items ?? [])) {
 
-          const platPid = li.product_id ? String(li.product_id) : null;
+          const platformProductId = li.product_id ? String(li.product_id) : null;
 
-          let internalProdId: string | null = null;
+          let internalProductId: string | null = null;
 
-          if (platPid) {
-            const prod = findProductByPlatformId.get(platPid) as { id: string } | undefined;
+          if (platformProductId) {
+            const productRow = findProductByPlatformId.get(platformProductId) as { id: string } | undefined;
 
-            internalProdId = prod?.id ?? null;
+            internalProductId = productRow?.id ?? null;
           }
 
-          insertLineItem.run(orderId, internalProdId, platPid);
+          insertLineItem.run(internalOrderId, internalProductId, platformProductId);
         }
       }
 
@@ -91,21 +112,26 @@ export async function syncOrders() {
 
     tx(orders);
 
-    fetched += orders.length;
+    fetchedCount += orders.length;
 
-    total += orders.length;
+    totalProcessed += orders.length;
 
     return nextPageInfo;
   }
 
-  // Probe inicial
-  next = await pageRun(next);
-  if (fetched < MAX && next) limit = 1; // aplica regla “fewer than 50 → 1 per call”
+  // Probe the first page (to decide whether we need to switch to limit=1)
+  nextCursor = await pageRun(nextCursor);
 
-  while (next && fetched < 500) {
-    next = await pageRun(next);
-    if (next) await sleep(SOFT_DELAY);
+  // If the first page returned fewer than 50 orders but a next page exists, switch to limit=1.
+  if (fetchedCount < MAX_PER_REQUEST && nextCursor) {
+    itemsLimit = 1;
   }
 
-  return total;
+  // Continue until no more pages or we hit the 500-order cap
+  while (nextCursor && fetchedCount < 500) {
+    nextCursor = await pageRun(nextCursor);
+    if (nextCursor) await sleep(SOFT_DELAY);
+  }
+
+  return totalProcessed;
 }
