@@ -1,3 +1,16 @@
+/**
+ * Simple command-line interface:
+ *   - sync-products: fetch + persist products
+ *   - sync-orders:   fetch + persist orders and line items
+ *   - get-products:  export Product[]  -> outputs/products.unified.json
+ *   - get-orders:    export Order[]    -> outputs/orders.unified.json
+ *
+ * Notes:
+ *   - Loads environment variables via dotenv
+ *   - Creates outputs/ directory if necessary
+ *   - Prints usage for unknown commands
+ */
+
 import * as dotenv from 'dotenv';
 dotenv.config();
 
@@ -17,42 +30,42 @@ function writeJson(path: string, data: unknown) {
 async function main() {
   const cmd = process.argv[2];
 
-  switch (cmd) {
-    case "sync-products": {
-      const n = await syncProducts();
-      console.log(`Synced products: ${n}`);
-      return;
-    }
-    case "sync-orders": {
-      const n = await syncOrders();
-      console.log(`Synced orders: ${n}`);
-      return;
-    }
-    case "get-products": {
-      ensureOutputsDir();
-      const data = getProducts();
-      writeJson("outputs/products.unified.json", data);
-      return;
-    }
-    case "get-orders": {
-      ensureOutputsDir();
-      const data = getOrders();
-      writeJson("outputs/orders.unified.json", data);
-      return;
-    }
-    default: {
-      console.log(`Usage:
-        npm run sync:products
-        npm run sync:orders
-        npm run get:products
-        npm run get:orders
+  try {
+    switch (cmd) {
+      case "sync-products": {
+        const n = await syncProducts();
+        console.log(`Synced products: ${n}`);
+        return;
+      }
+      case "sync-orders": {
+        const n = await syncOrders();
+        console.log(`Synced orders: ${n}`);
+        return;
+      }
+      case "get-products": {
+        ensureOutputsDir();
+        writeJson("outputs/products.unified.json", getProducts());
+        return;
+      }
+      case "get-orders": {
+        ensureOutputsDir();
+        writeJson("outputs/orders.unified.json", getOrders());
+        return;
+      }
+      default: {
+        process.exitCode = 1;
+        console.log(`Usage:
+          npm run sync:products
+          npm run sync:orders
+          npm run get:products
+          npm run get:orders
       `);
+      }
     }
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
   }
 }
 
-
-main().catch((err) => {
-  console.log(err);
-  process.exit(1);
-})
+main();

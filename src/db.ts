@@ -1,6 +1,4 @@
 /**
- * db.ts
- *
  * SQLite schema + prepared statements.
  *
  * - Persists Shopify products and orders locally
